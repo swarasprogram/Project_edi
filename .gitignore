@@ -1,0 +1,11 @@
+# React
+frontend/node_modules/
+frontend/build/
+
+# Dotnet
+backend/bin/
+backend/obj/
+backend/.vs/
+
+# OS junk
+.DS_Store
