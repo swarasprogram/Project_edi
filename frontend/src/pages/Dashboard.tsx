@@ -1,170 +1,271 @@
-import { 
-  Shield, 
-  MessageSquareText, 
-  TrendingUp, 
-  Bot, 
-  FileText,
-  AlertTriangle,
-  Users,
-  Activity,
-  ArrowRight
-} from "lucide-react";
-import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Activity, Users, ShieldAlert, Cpu, ArrowRight } from "lucide-react";
 import { KPICard } from "@/components/shared/KPICard";
 import { Card, CardHeader, CardTitle } from "@/components/shared/Card";
-import { Badge } from "@/components/shared/Badge";
-
-const modules = [
-  {
-    path: "/fraud-detection",
-    title: "Audit & Fraud Detection",
-    description: "Monitor suspicious transactions and risk scores",
-    icon: Shield,
-    stats: { label: "Flagged Today", value: "23" },
-    color: "primary" as const,
-  },
-  {
-    path: "/sentiment-crm",
-    title: "Sentiment Analysis CRM",
-    description: "Track customer messages and sentiment insights",
-    icon: MessageSquareText,
-    stats: { label: "Pending Messages", value: "156" },
-    color: "accent" as const,
-  },
-  {
-    path: "/loan-prediction",
-    title: "Loan Prediction",
-    description: "Predict default risk and cross-sell opportunities",
-    icon: TrendingUp,
-    stats: { label: "Predictions Today", value: "89" },
-    color: "success" as const,
-  },
-  {
-    path: "/chatbot",
-    title: "AI Chatbot Assistant",
-    description: "Conversational AI for banking queries",
-    icon: Bot,
-    stats: { label: "Queries Handled", value: "1.2K" },
-    color: "warning" as const,
-  },
-  {
-    path: "/regulation-monitor",
-    title: "Regulation NLP Monitor",
-    description: "Compliance and regulatory risk scanning",
-    icon: FileText,
-    stats: { label: "High Risk Flags", value: "5" },
-    color: "destructive" as const,
-  },
-];
-
-const recentAlerts = [
-  { id: 1, type: "Fraud", message: "High-risk transaction detected - ₹2.5L", time: "2 mins ago" },
-  { id: 2, type: "CRM", message: "Critical complaint from premium customer", time: "15 mins ago" },
-  { id: 3, type: "Regulation", message: "New RBI circular requires attention", time: "1 hour ago" },
-];
+import { fetchDashboardSummary, DashboardSummary } from "../api/dashboardApi";
 
 export default function Dashboard() {
+  const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await fetchDashboardSummary();
+        setSummary(data);
+      } catch (err) {
+        console.error("Failed to load dashboard summary", err);
+        setError("Failed to load dashboard data.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, []);
+
+  const alertsToday = summary?.totalAlertsToday ?? 0;
+  const activeCustomers = summary?.activeCustomers ?? 0;
+  const systemHealth = summary?.systemHealth ?? 0;
+  const aiAccuracy = summary?.aiAccuracy ?? 0;
+  const flaggedToday = summary?.flaggedToday ?? 0;
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
-        <p className="text-muted-foreground mt-1">Welcome back to AI Banking Intelligence Suite</p>
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <p className="text-muted-foreground mt-1">
+          Welcome back to AI Banking Intelligence Suite
+        </p>
+        {error && (
+          <p className="text-xs text-destructive mt-1">
+            {error}
+          </p>
+        )}
       </div>
 
-      {/* KPI Summary */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Top KPI cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <KPICard
           title="Total Alerts Today"
-          value="47"
-          icon={AlertTriangle}
-          trend={{ value: 12, isPositive: false }}
+          value={
+            loading
+              ? "..."
+              : alertsToday.toString()
+          }
+          icon={ShieldAlert}
+          trend={{ value: -12, isPositive: false }}
           accentColor="destructive"
         />
         <KPICard
           title="Active Customers"
-          value="12,847"
+          value={
+            loading
+              ? "..."
+              : activeCustomers.toLocaleString()
+          }
           icon={Users}
           trend={{ value: 5.2, isPositive: true }}
           accentColor="primary"
         />
         <KPICard
           title="System Health"
-          value="99.8%"
+          value={
+            loading
+              ? "..."
+              : `${systemHealth.toFixed(1)}%`
+          }
           subtitle="All services operational"
           icon={Activity}
-          accentColor="success"
+          accentColor="accent"
         />
         <KPICard
           title="AI Accuracy"
-          value="94.2%"
+          value={
+            loading
+              ? "..."
+              : `${aiAccuracy.toFixed(1)}%`
+          }
           subtitle="Across all models"
-          icon={Bot}
+          icon={Cpu}
           accentColor="accent"
         />
       </div>
 
-      {/* Modules Grid */}
-      <div>
-        <h2 className="text-lg font-semibold text-foreground mb-4">Intelligence Modules</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {modules.map((module) => (
-            <Link
-              key={module.path}
-              to={module.path}
-              className="card-banking p-5 group hover:shadow-elevated transition-all duration-300"
-            >
-              <div className="flex items-start gap-4">
-                <div className={`w-12 h-12 rounded-xl flex items-center justify-center bg-${module.color}/10`}>
-                  <module.icon className={`w-6 h-6 text-${module.color}`} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-semibold text-foreground group-hover:text-primary transition-colors">
-                    {module.title}
-                  </h3>
-                  <p className="text-sm text-muted-foreground mt-0.5 line-clamp-2">
-                    {module.description}
-                  </p>
-                  <div className="mt-3 flex items-center justify-between">
-                    <div>
-                      <span className="text-xs text-muted-foreground">{module.stats.label}</span>
-                      <p className="font-bold text-foreground">{module.stats.value}</p>
-                    </div>
-                    <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-primary group-hover:translate-x-1 transition-all" />
-                  </div>
-                </div>
+      {/* Intelligence modules grid */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Audit & Fraud */}
+        <Card className="card-banking">
+          <div className="flex justify-between items-start gap-2 p-5">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Audit & Fraud Detection
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Monitor suspicious transactions and risk scores
+              </p>
+              <div className="mt-3">
+                <p className="text-xs text-muted-foreground">Flagged Today</p>
+                <p className="text-lg font-semibold">
+                  {loading ? "..." : flaggedToday}
+                </p>
               </div>
-            </Link>
-          ))}
-        </div>
+            </div>
+            <a
+              href="/fraud"
+              className="inline-flex items-center text-xs font-medium text-primary hover:underline"
+            >
+              Open <ArrowRight className="w-3 h-3 ml-1" />
+            </a>
+          </div>
+        </Card>
+
+        {/* Sentiment CRM */}
+        <Card className="card-banking">
+          <div className="flex justify-between items-start gap-2 p-5">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Sentiment Analysis CRM
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Track customer messages and sentiment insights
+              </p>
+              <div className="mt-3">
+                <p className="text-xs text-muted-foreground">Pending Messages</p>
+                {/* Still static for now until you have a real NLP backend */}
+                <p className="text-lg font-semibold">156</p>
+              </div>
+            </div>
+            <a
+              href="/sentiment"
+              className="inline-flex items-center text-xs font-medium text-primary hover:underline"
+            >
+              Open <ArrowRight className="w-3 h-3 ml-1" />
+            </a>
+          </div>
+        </Card>
+
+        {/* Loan Prediction */}
+        <Card className="card-banking">
+          <div className="flex justify-between items-start gap-2 p-5">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Loan Prediction
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Predict default risk and cross-sell opportunities
+              </p>
+              <div className="mt-3">
+                <p className="text-xs text-muted-foreground">Predictions Today</p>
+                {/* Static until you hook up the loan model */}
+                <p className="text-lg font-semibold">89</p>
+              </div>
+            </div>
+            <a
+              href="/loan"
+              className="inline-flex items-center text-xs font-medium text-primary hover:underline"
+            >
+              Open <ArrowRight className="w-3 h-3 ml-1" />
+            </a>
+          </div>
+        </Card>
+
+        {/* Chatbot */}
+        <Card className="card-banking">
+          <div className="flex justify-between items-start gap-2 p-5">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                AI Chatbot Assistant
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Conversational AI for banking queries
+              </p>
+              <div className="mt-3">
+                <p className="text-xs text-muted-foreground">Queries Handled</p>
+                <p className="text-lg font-semibold">1.2K</p>
+              </div>
+            </div>
+            <a
+              href="/chatbot"
+              className="inline-flex items-center text-xs font-medium text-primary hover:underline"
+            >
+              Open <ArrowRight className="w-3 h-3 ml-1" />
+            </a>
+          </div>
+        </Card>
+
+        {/* Regulation NLP */}
+        <Card className="card-banking">
+          <div className="flex justify-between items-start gap-2 p-5">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Regulation NLP Monitor
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Compliance and regulatory risk scanning
+              </p>
+              <div className="mt-3">
+                <p className="text-xs text-muted-foreground">High Risk Flags</p>
+                <p className="text-lg font-semibold">5</p>
+              </div>
+            </div>
+            <a
+              href="/regulation"
+              className="inline-flex items-center text-xs font-medium text-primary hover:underline"
+            >
+              Open <ArrowRight className="w-3 h-3 ml-1" />
+            </a>
+          </div>
+        </Card>
       </div>
 
       {/* Recent Alerts */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Alerts</CardTitle>
-          <Link to="/fraud-detection" className="text-sm text-primary hover:underline">
-            View all
-          </Link>
+      <Card className="mt-4">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle>Recent Alerts</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Last few high-risk transactions from the fraud model
+            </p>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {summary?.recentAlerts.length ?? 0} alerts
+          </span>
         </CardHeader>
-        <div className="space-y-3">
-          {recentAlerts.map((alert) => (
+
+        <div className="divide-y">
+          {(summary?.recentAlerts ?? []).map((alert) => (
             <div
-              key={alert.id}
-              className="flex items-center gap-3 p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
+              key={`${alert.transactionId}-${alert.date}`}
+              className="flex items-center justify-between px-5 py-3"
             >
-              <div className="w-2 h-2 rounded-full bg-destructive animate-pulse-soft" />
-              <div className="flex-1 min-w-0">
+              <div className="space-y-1">
                 <div className="flex items-center gap-2">
-                  <Badge variant={alert.type === "Fraud" ? "destructive" : alert.type === "CRM" ? "warning" : "default"}>
-                    {alert.type}
-                  </Badge>
-                  <span className="text-sm text-foreground truncate">{alert.message}</span>
+                  <span className="chip bg-destructive/10 text-destructive border-destructive/20">
+                    Fraud
+                  </span>
+                  <span className="text-sm font-medium">
+                    {alert.message}
+                  </span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {alert.transactionId} · {alert.date}
                 </div>
               </div>
-              <span className="text-xs text-muted-foreground whitespace-nowrap">{alert.time}</span>
+              <span className="badge-risk-high">
+                Risk {alert.riskScore}
+              </span>
             </div>
           ))}
+
+          {!loading && (summary?.recentAlerts.length ?? 0) === 0 && (
+            <div className="px-5 py-6 text-sm text-muted-foreground">
+              No recent alerts from the model yet.
+            </div>
+          )}
         </div>
       </Card>
     </div>

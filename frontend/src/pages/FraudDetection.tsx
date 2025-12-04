@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { scoreTransaction, FraudScoreResponse } from "../api/fraudApi";
 import {
   Shield,
@@ -32,8 +32,8 @@ import {
   Line,
 } from "recharts";
 
-// Type for rows coming from backend
-type FraudTableRow = {
+// ---- Types coming from backend /api/fraud/transactions ----
+export type FraudTableRow = {
   id: string;
   date: string;
   customer: string;
@@ -44,25 +44,13 @@ type FraudTableRow = {
 };
 
 export default function FraudDetection() {
+  const [rows, setRows] = useState<FraudTableRow[]>([]);
   const [selectedTransaction, setSelectedTransaction] = useState<string | null>(
     null
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [channelFilter, setChannelFilter] = useState("All");
   const [minRiskScore, setMinRiskScore] = useState(0);
-
-  // 🔥 Dynamic table rows loaded from backend
-  const [rows, setRows] = useState<FraudTableRow[]>([]);
-
-  useEffect(() => {
-    fetch("http://localhost:5200/api/fraud/transactions")
-      .then((r) => r.json())
-      .then((data) => {
-        console.log("Loaded transactions:", data);
-        setRows(data);
-      })
-      .catch((err) => console.error("Failed to load transactions", err));
-  }, []);
 
   // Live model scoring state
   const [liveAmount, setLiveAmount] = useState(50000);
@@ -73,19 +61,60 @@ export default function FraudDetection() {
   const [liveError, setLiveError] = useState<string | null>(null);
   const [liveResult, setLiveResult] = useState<FraudScoreResponse | null>(null);
 
+  const [tableError, setTableError] = useState<string | null>(null);
+  const [tableLoading, setTableLoading] = useState<boolean>(false);
+
+  // ---- Load transactions from .NET → Python on mount ----
+  useEffect(() => {
+    const load = async () => {
+      try {
+        setTableLoading(true);
+        setTableError(null);
+
+        const res = await fetch(
+          "http://localhost:5200/api/fraud/transactions"
+        );
+        if (!res.ok) {
+          const text = await res.text();
+          console.error("Failed to load transactions:", res.status, text);
+          setTableError(
+            `Failed to load transactions (${res.status}). Check backend.`
+          );
+          setRows([]);
+          return;
+        }
+
+        const data: FraudTableRow[] = await res.json();
+        console.log("Loaded transactions from backend:", data);
+        setRows(data);
+      } catch (err) {
+        console.error("Error loading transactions:", err);
+        setTableError("Error loading transactions. See console for details.");
+        setRows([]);
+      } finally {
+        setTableLoading(false);
+      }
+    };
+
+    load();
+  }, []);
+
+  // ---- Filtering logic uses backend rows ----
   const filteredTransactions = rows.filter((txn) => {
     const matchesSearch =
       txn.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
       txn.customer.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesChannel = channelFilter === "All" || txn.channel === channelFilter;
+    const matchesChannel =
+      channelFilter === "All" || txn.channel === channelFilter;
     const matchesRisk = txn.riskScore >= minRiskScore;
     return matchesSearch && matchesChannel && matchesRisk;
   });
 
   const selectedTxn = rows.find((t) => t.id === selectedTransaction);
-  // still using mock details for now
+  // still using mock transactionDetails for the drawer text
   const txnDetails = selectedTransaction ? transactionDetails.TXN001 : null;
 
+  // ---- Live scoring handler ----
   const handleLiveScore = async () => {
     try {
       setLiveLoading(true);
@@ -104,7 +133,9 @@ export default function FraudDetection() {
       setLiveResult(data);
     } catch (err) {
       console.error(err);
-      setLiveError("Failed to score transaction. Check backend services are running.");
+      setLiveError(
+        "Failed to score transaction. Check backend services are running."
+      );
     } finally {
       setLiveLoading(false);
     }
@@ -114,13 +145,15 @@ export default function FraudDetection() {
     <div className="space-y-6 animate-fade-in">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Audit & Fraud Detection</h1>
+        <h1 className="text-2xl font-bold text-foreground">
+          Audit & Fraud Detection
+        </h1>
         <p className="text-muted-foreground mt-1">
           Monitor suspicious transactions and risk insights from AI models
         </p>
       </div>
 
-      {/* KPI Cards (still using demo numbers for now) */}
+      {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <KPICard
           title="Total Transactions Today"
@@ -171,10 +204,8 @@ export default function FraudDetection() {
             className="input-banking w-auto min-w-[140px]"
           >
             <option value="All">All Channels</option>
-            <option value="UPI">UPI</option>
-            <option value="NEFT">NEFT</option>
-            <option value="IMPS">IMPS</option>
-            <option value="Card">Card</option>
+            <option value="Debit">Debit</option>
+            <option value="Credit">Credit</option>
           </select>
 
           <div className="flex items-center gap-2">
@@ -200,7 +231,8 @@ export default function FraudDetection() {
             <div>
               <h3 className="text-sm font-semibold">Live Fraud Risk Scoring</h3>
               <p className="text-xs text-muted-foreground">
-                Send a sample transaction to the ML model and see its risk classification.
+                Send a sample transaction to the ML model and see its risk
+                classification.
               </p>
             </div>
           </div>
@@ -229,7 +261,9 @@ export default function FraudDetection() {
             </div>
 
             <div>
-              <p className="text-xs text-muted-foreground mb-1">Merchant Country</p>
+              <p className="text-xs text-muted-foreground mb-1">
+                Merchant Country
+              </p>
               <input
                 type="text"
                 value={liveCountry}
@@ -272,7 +306,9 @@ export default function FraudDetection() {
                 <p className="font-semibold">{liveResult.riskScore} / 100</p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Fraud Probability</p>
+                <p className="text-xs text-muted-foreground">
+                  Fraud Probability
+                </p>
                 <p className="font-semibold">
                   {(liveResult.fraudProbability * 100).toFixed(1)}%
                 </p>
@@ -297,8 +333,20 @@ export default function FraudDetection() {
         {/* Transactions Table */}
         <div className="xl:col-span-2">
           <Card padding="none">
-            <CardHeader className="p-5 border-b border-border">
-              <CardTitle>Recent Flagged Transactions</CardTitle>
+            <CardHeader className="p-5 border-b border-border flex items-center justify-between">
+              <div>
+                <CardTitle>Recent Flagged Transactions</CardTitle>
+                {tableLoading && (
+                  <span className="text-xs text-muted-foreground">
+                    Loading from backend...
+                  </span>
+                )}
+                {tableError && (
+                  <span className="text-xs text-destructive block">
+                    {tableError}
+                  </span>
+                )}
+              </div>
               <span className="text-sm text-muted-foreground">
                 {filteredTransactions.length} transactions
               </span>
@@ -319,14 +367,18 @@ export default function FraudDetection() {
                 <tbody>
                   {filteredTransactions.map((txn) => (
                     <tr
-                      key={txn.id}
+                      key={txn.id + txn.date}
                       onClick={() => setSelectedTransaction(txn.id)}
-                      className={txn.id === selectedTransaction ? "bg-primary/5" : ""}
+                      className={
+                        txn.id === selectedTransaction ? "bg-primary/5" : ""
+                      }
                     >
                       <td className="font-mono text-sm">{txn.id}</td>
                       <td className="text-muted-foreground">{txn.date}</td>
                       <td className="font-medium">{txn.customer}</td>
-                      <td className="font-medium">₹{txn.amount.toLocaleString()}</td>
+                      <td className="font-medium">
+                        ₹{txn.amount.toLocaleString()}
+                      </td>
                       <td>
                         <span className="chip">{txn.channel}</span>
                       </td>
@@ -338,13 +390,23 @@ export default function FraudDetection() {
                       </td>
                     </tr>
                   ))}
+                  {filteredTransactions.length === 0 && !tableLoading && (
+                    <tr>
+                      <td
+                        colSpan={7}
+                        className="text-center text-sm text-muted-foreground py-6"
+                      >
+                        No transactions to display.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
           </Card>
         </div>
 
-        {/* Charts (still using mock data) */}
+        {/* Charts */}
         <div className="space-y-6">
           <Card>
             <CardHeader>
@@ -353,7 +415,10 @@ export default function FraudDetection() {
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={riskDistribution}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="hsl(var(--border))"
+                  />
                   <XAxis dataKey="band" tick={{ fontSize: 10 }} />
                   <YAxis tick={{ fontSize: 10 }} />
                   <Tooltip
@@ -380,7 +445,10 @@ export default function FraudDetection() {
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={fraudAlertsOverTime}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="hsl(var(--border))"
+                  />
                   <XAxis dataKey="day" tick={{ fontSize: 10 }} />
                   <YAxis tick={{ fontSize: 10 }} />
                   <Tooltip
@@ -438,7 +506,7 @@ export default function FraudDetection() {
               </div>
             </div>
 
-            {/* Sender/Receiver (still mock details) */}
+            {/* Sender/Receiver */}
             <Card className="bg-muted/30">
               <div className="space-y-3">
                 <div>
@@ -476,7 +544,9 @@ export default function FraudDetection() {
 
             {/* Risk Explanation */}
             <Card className="bg-destructive/5 border-destructive/20">
-              <h4 className="font-medium text-destructive mb-2">Risk Explanation</h4>
+              <h4 className="font-medium text-destructive mb-2">
+                Risk Explanation
+              </h4>
               <p className="text-sm text-muted-foreground">
                 {txnDetails.riskExplanation}
               </p>
