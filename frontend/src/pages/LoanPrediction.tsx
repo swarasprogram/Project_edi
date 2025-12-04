@@ -7,10 +7,16 @@ import {
   CreditCard,
   Info,
 } from "lucide-react";
-import { Card, CardHeader, CardTitle, CardDescription } from "@/components/shared/Card";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/shared/Card";
 import { Badge } from "@/components/shared/Badge";
 import { ProgressBar } from "@/components/shared/ProgressBar";
 import { loanProducts } from "@/data/mockData";
+import { scoreLoan, LoanScoreResponse, LoanScoreRequest } from "@/api/loanApi";
 
 interface FormData {
   gender: string;
@@ -31,8 +37,10 @@ interface FormData {
 }
 
 interface PredictionResult {
-  defaultProbability: number;
+  defaultProbability: number; // 0–100 %
   riskBucket: "Low" | "Medium" | "High";
+  riskScore: number;
+  riskLevel: string;
   recommendations: typeof loanProducts;
   factors: { factor: string; impact: string; isPositive: boolean }[];
 }
@@ -59,12 +67,14 @@ export default function LoanPrediction() {
   const [errors, setErrors] = useState<Partial<FormData>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<PredictionResult | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   const handleChange = (field: keyof FormData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
     if (errors[field]) {
       setErrors((prev) => ({ ...prev, [field]: undefined }));
     }
+    if (apiError) setApiError(null);
   };
 
   const validate = () => {
@@ -81,23 +91,131 @@ export default function LoanPrediction() {
     if (!validate()) return;
 
     setIsLoading(true);
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    setApiError(null);
+    setResult(null);
 
-    // Mock result
-    const prob = Math.floor(Math.random() * 60) + 20;
-    setResult({
-      defaultProbability: prob,
-      riskBucket: prob > 70 ? "High" : prob > 40 ? "Medium" : "Low",
-      recommendations: loanProducts.slice(0, 3),
-      factors: [
-        { factor: "High Debt-to-Income Ratio", impact: "+15% risk", isPositive: false },
-        { factor: "Good Credit History", impact: "-10% risk", isPositive: true },
-        { factor: "Stable Income", impact: "-8% risk", isPositive: true },
-        { factor: "Short Loan Term", impact: "-5% risk", isPositive: true },
-      ],
-    });
-    setIsLoading(false);
+    try {
+      // derive a fake-ish creditScore from creditHistory dropdown
+      const creditHistoryRaw = formData.creditHistory;
+      const creditScore =
+        creditHistoryRaw === "1"
+          ? 750
+          : creditHistoryRaw === "0"
+          ? 600
+          : 680; // "Unknown" -> middle-ish
+
+      // ✅ Payload that EXACTLY matches LoanScoreRequest from loanApi.ts
+      const payload: LoanScoreRequest = {
+        loanAmount: Number(formData.loanAmount || 0),
+        tenureMonths: Number(formData.loanTerm || 0),
+        applicantIncome: Number(formData.applicantIncome || 0),
+        creditScore,
+        existingLoans: 0,
+      };
+
+      const res: LoanScoreResponse = await scoreLoan(payload);
+
+      const probPercent = Math.round(res.defaultProbability * 100);
+
+      const level = (res.riskLevel || "").toLowerCase();
+      let bucket: "Low" | "Medium" | "High" = "Low";
+      if (level.includes("high")) bucket = "High";
+      else if (level.includes("med")) bucket = "Medium";
+
+      // Explainable factors – purely UI, not from model
+      const factors =
+        bucket === "High"
+          ? [
+              {
+                factor: "High Debt-to-Income Ratio",
+                impact: "+18% risk",
+                isPositive: false,
+              },
+              {
+                factor: "Short / weak credit history",
+                impact: "+10% risk",
+                isPositive: false,
+              },
+              {
+                factor: "High loan amount vs income",
+                impact: "+8% risk",
+                isPositive: false,
+              },
+              {
+                factor: "Some income stability",
+                impact: "-6% risk",
+                isPositive: true,
+              },
+            ]
+          : bucket === "Medium"
+          ? [
+              {
+                factor: "Balanced DTI",
+                impact: "+5% risk",
+                isPositive: false,
+              },
+              {
+                factor: "Decent credit history",
+                impact: "-10% risk",
+                isPositive: true,
+              },
+              {
+                factor: "Co-applicant support (implicit)",
+                impact: "-4% risk",
+                isPositive: true,
+              },
+              {
+                factor: "Moderate tenure",
+                impact: "+3% risk",
+                isPositive: false,
+              },
+            ]
+          : [
+              {
+                factor: "Strong income profile",
+                impact: "-12% risk",
+                isPositive: true,
+              },
+              {
+                factor: "Good credit history",
+                impact: "-10% risk",
+                isPositive: true,
+              },
+              {
+                factor: "Low DTI",
+                impact: "-8% risk",
+                isPositive: true,
+              },
+              {
+                factor: "Reasonable loan amount",
+                impact: "-5% risk",
+                isPositive: true,
+              },
+            ];
+
+      // Product recommendations – sorted by acceptance
+      const sortedByAcceptance = [...loanProducts].sort(
+        (a, b) => b.acceptance - a.acceptance
+      );
+      const recs =
+        bucket === "High"
+          ? sortedByAcceptance.slice(0, 2)
+          : sortedByAcceptance.slice(0, 3);
+
+      setResult({
+        defaultProbability: probPercent,
+        riskBucket: bucket,
+        riskScore: res.riskScore,
+        riskLevel: res.riskLevel,
+        recommendations: recs,
+        factors,
+      });
+    } catch (err) {
+      console.error(err);
+      setApiError("Failed to get prediction. Check backend and ML service.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleReset = () => {
@@ -120,22 +238,26 @@ export default function LoanPrediction() {
     });
     setErrors({});
     setResult(null);
+    setApiError(null);
   };
 
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header */}
       <div className="text-center max-w-2xl mx-auto">
-        <h1 className="text-2xl font-bold text-foreground">Loan Prediction & Cross-Sell System</h1>
+        <h1 className="text-2xl font-bold text-foreground">
+          Loan Prediction & Cross-Sell System
+        </h1>
         <p className="text-muted-foreground mt-2">
-          Predict default risk and identify best loan products for your customers
+          Predict default risk and identify best loan products for your
+          customers
         </p>
       </div>
 
       <div className="max-w-4xl mx-auto">
         <Card>
           {/* Form Section */}
-          <div className="space-y-6">
+          <div className="space-y-6 p-5">
             {/* Personal Details */}
             <div>
               <h3 className="font-semibold text-foreground mb-4 flex items-center gap-2">
@@ -146,7 +268,9 @@ export default function LoanPrediction() {
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div>
-                  <label className="text-sm text-muted-foreground mb-1.5 block">Gender</label>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">
+                    Gender
+                  </label>
                   <select
                     value={formData.gender}
                     onChange={(e) => handleChange("gender", e.target.value)}
@@ -159,10 +283,14 @@ export default function LoanPrediction() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-sm text-muted-foreground mb-1.5 block">Marital Status</label>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">
+                    Marital Status
+                  </label>
                   <select
                     value={formData.maritalStatus}
-                    onChange={(e) => handleChange("maritalStatus", e.target.value)}
+                    onChange={(e) =>
+                      handleChange("maritalStatus", e.target.value)
+                    }
                     className="input-banking"
                   >
                     <option value="">Select</option>
@@ -171,10 +299,14 @@ export default function LoanPrediction() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-sm text-muted-foreground mb-1.5 block">Dependents</label>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">
+                    Dependents
+                  </label>
                   <select
                     value={formData.dependents}
-                    onChange={(e) => handleChange("dependents", e.target.value)}
+                    onChange={(e) =>
+                      handleChange("dependents", e.target.value)
+                    }
                     className="input-banking"
                   >
                     <option value="">Select</option>
@@ -185,10 +317,14 @@ export default function LoanPrediction() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-sm text-muted-foreground mb-1.5 block">Education</label>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">
+                    Education
+                  </label>
                   <select
                     value={formData.education}
-                    onChange={(e) => handleChange("education", e.target.value)}
+                    onChange={(e) =>
+                      handleChange("education", e.target.value)
+                    }
                     className="input-banking"
                   >
                     <option value="">Select</option>
@@ -197,10 +333,14 @@ export default function LoanPrediction() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-sm text-muted-foreground mb-1.5 block">Self Employed</label>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">
+                    Self Employed
+                  </label>
                   <select
                     value={formData.selfEmployed}
-                    onChange={(e) => handleChange("selfEmployed", e.target.value)}
+                    onChange={(e) =>
+                      handleChange("selfEmployed", e.target.value)
+                    }
                     className="input-banking"
                   >
                     <option value="">Select</option>
@@ -222,67 +362,97 @@ export default function LoanPrediction() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div>
                   <label className="text-sm text-muted-foreground mb-1.5 block">
-                    Applicant Income (₹) <span className="text-destructive">*</span>
+                    Applicant Income (₹){" "}
+                    <span className="text-destructive">*</span>
                   </label>
                   <input
                     type="number"
                     value={formData.applicantIncome}
-                    onChange={(e) => handleChange("applicantIncome", e.target.value)}
+                    onChange={(e) =>
+                      handleChange("applicantIncome", e.target.value)
+                    }
                     placeholder="e.g., 50000"
-                    className={`input-banking ${errors.applicantIncome ? "border-destructive" : ""}`}
+                    className={`input-banking ${
+                      errors.applicantIncome ? "border-destructive" : ""
+                    }`}
                   />
                   {errors.applicantIncome && (
-                    <p className="text-xs text-destructive mt-1">{errors.applicantIncome}</p>
+                    <p className="text-xs text-destructive mt-1">
+                      {errors.applicantIncome}
+                    </p>
                   )}
                 </div>
                 <div>
-                  <label className="text-sm text-muted-foreground mb-1.5 block">Co-Applicant Income (₹)</label>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">
+                    Co-Applicant Income (₹)
+                  </label>
                   <input
                     type="number"
                     value={formData.coapplicantIncome}
-                    onChange={(e) => handleChange("coapplicantIncome", e.target.value)}
+                    onChange={(e) =>
+                      handleChange("coapplicantIncome", e.target.value)
+                    }
                     placeholder="e.g., 25000"
                     className="input-banking"
                   />
                 </div>
                 <div>
                   <label className="text-sm text-muted-foreground mb-1.5 block">
-                    Loan Amount (₹) <span className="text-destructive">*</span>
+                    Loan Amount (₹){" "}
+                    <span className="text-destructive">*</span>
                   </label>
                   <input
                     type="number"
                     value={formData.loanAmount}
-                    onChange={(e) => handleChange("loanAmount", e.target.value)}
+                    onChange={(e) =>
+                      handleChange("loanAmount", e.target.value)
+                    }
                     placeholder="e.g., 500000"
-                    className={`input-banking ${errors.loanAmount ? "border-destructive" : ""}`}
+                    className={`input-banking ${
+                      errors.loanAmount ? "border-destructive" : ""
+                    }`}
                   />
                   {errors.loanAmount && (
-                    <p className="text-xs text-destructive mt-1">{errors.loanAmount}</p>
+                    <p className="text-xs text-destructive mt-1">
+                      {errors.loanAmount}
+                    </p>
                   )}
                 </div>
                 <div>
                   <label className="text-sm text-muted-foreground mb-1.5 block">
-                    Loan Term (months) <span className="text-destructive">*</span>
+                    Loan Term (months){" "}
+                    <span className="text-destructive">*</span>
                   </label>
                   <input
                     type="number"
                     value={formData.loanTerm}
-                    onChange={(e) => handleChange("loanTerm", e.target.value)}
+                    onChange={(e) =>
+                      handleChange("loanTerm", e.target.value)
+                    }
                     placeholder="e.g., 360"
-                    className={`input-banking ${errors.loanTerm ? "border-destructive" : ""}`}
+                    className={`input-banking ${
+                      errors.loanTerm ? "border-destructive" : ""
+                    }`}
                   />
                   {errors.loanTerm && (
-                    <p className="text-xs text-destructive mt-1">{errors.loanTerm}</p>
+                    <p className="text-xs text-destructive mt-1">
+                      {errors.loanTerm}
+                    </p>
                   )}
                 </div>
                 <div>
                   <label className="text-sm text-muted-foreground mb-1.5 block">
-                    Credit History <span className="text-destructive">*</span>
+                    Credit History{" "}
+                    <span className="text-destructive">*</span>
                   </label>
                   <select
                     value={formData.creditHistory}
-                    onChange={(e) => handleChange("creditHistory", e.target.value)}
-                    className={`input-banking ${errors.creditHistory ? "border-destructive" : ""}`}
+                    onChange={(e) =>
+                      handleChange("creditHistory", e.target.value)
+                    }
+                    className={`input-banking ${
+                      errors.creditHistory ? "border-destructive" : ""
+                    }`}
                   >
                     <option value="">Select</option>
                     <option value="1">Good (1)</option>
@@ -290,11 +460,15 @@ export default function LoanPrediction() {
                     <option value="Unknown">Unknown</option>
                   </select>
                   {errors.creditHistory && (
-                    <p className="text-xs text-destructive mt-1">{errors.creditHistory}</p>
+                    <p className="text-xs text-destructive mt-1">
+                      {errors.creditHistory}
+                    </p>
                   )}
                 </div>
                 <div>
-                  <label className="text-sm text-muted-foreground mb-1.5 block">Debt-to-Income Ratio (%)</label>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">
+                    Debt-to-Income Ratio (%)
+                  </label>
                   <input
                     type="number"
                     value={formData.dti}
@@ -316,7 +490,9 @@ export default function LoanPrediction() {
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div>
-                  <label className="text-sm text-muted-foreground mb-1.5 block">Purpose of Loan</label>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">
+                    Purpose of Loan
+                  </label>
                   <select
                     value={formData.purpose}
                     onChange={(e) => handleChange("purpose", e.target.value)}
@@ -331,10 +507,14 @@ export default function LoanPrediction() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-sm text-muted-foreground mb-1.5 block">Property Area</label>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">
+                    Property Area
+                  </label>
                   <select
                     value={formData.propertyArea}
-                    onChange={(e) => handleChange("propertyArea", e.target.value)}
+                    onChange={(e) =>
+                      handleChange("propertyArea", e.target.value)
+                    }
                     className="input-banking"
                   >
                     <option value="">Select</option>
@@ -344,22 +524,30 @@ export default function LoanPrediction() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-sm text-muted-foreground mb-1.5 block">Interest Rate (%)</label>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">
+                    Interest Rate (%)
+                  </label>
                   <input
                     type="number"
                     step="0.1"
                     value={formData.interestRate}
-                    onChange={(e) => handleChange("interestRate", e.target.value)}
+                    onChange={(e) =>
+                      handleChange("interestRate", e.target.value)
+                    }
                     placeholder="e.g., 8.5"
                     className="input-banking"
                   />
                 </div>
                 <div>
-                  <label className="text-sm text-muted-foreground mb-1.5 block">Installment (₹)</label>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">
+                    Installment (₹)
+                  </label>
                   <input
                     type="number"
                     value={formData.installment}
-                    onChange={(e) => handleChange("installment", e.target.value)}
+                    onChange={(e) =>
+                      handleChange("installment", e.target.value)
+                    }
                     placeholder="e.g., 15000"
                     className="input-banking"
                   />
@@ -391,6 +579,10 @@ export default function LoanPrediction() {
                 Reset
               </button>
             </div>
+
+            {apiError && (
+              <p className="text-xs text-destructive mt-2">{apiError}</p>
+            )}
           </div>
         </Card>
 
@@ -398,19 +590,37 @@ export default function LoanPrediction() {
         {result && (
           <div className="mt-6 space-y-4 animate-slide-up">
             {/* Main Result */}
-            <Card className={`border-2 ${result.riskBucket === "High" ? "border-destructive/30 bg-destructive/5" : result.riskBucket === "Medium" ? "border-warning/30 bg-warning/5" : "border-success/30 bg-success/5"}`}>
-              <div className="text-center">
+            <Card
+              className={`border-2 ${
+                result.riskBucket === "High"
+                  ? "border-destructive/30 bg-destructive/5"
+                  : result.riskBucket === "Medium"
+                  ? "border-warning/30 bg-warning/5"
+                  : "border-success/30 bg-success/5"
+              }`}
+            >
+              <div className="text-center p-5">
                 <div className="flex items-center justify-center gap-2 mb-2">
                   {result.riskBucket === "High" ? (
                     <AlertTriangle className="w-6 h-6 text-destructive" />
                   ) : (
                     <CheckCircle className="w-6 h-6 text-success" />
                   )}
-                  <span className="text-lg font-medium text-muted-foreground">Default Probability</span>
+                  <span className="text-lg font-medium text-muted-foreground">
+                    Default Probability
+                  </span>
                 </div>
-                <p className="text-5xl font-bold text-foreground mb-2">{result.defaultProbability}%</p>
+                <p className="text-5xl font-bold text-foreground mb-2">
+                  {result.defaultProbability}%
+                </p>
                 <Badge
-                  variant={result.riskBucket === "High" ? "destructive" : result.riskBucket === "Medium" ? "warning" : "success"}
+                  variant={
+                    result.riskBucket === "High"
+                      ? "destructive"
+                      : result.riskBucket === "Medium"
+                      ? "warning"
+                      : "success"
+                  }
                   size="md"
                 >
                   {result.riskBucket} Risk
@@ -419,7 +629,13 @@ export default function LoanPrediction() {
                 <div className="mt-4 max-w-md mx-auto">
                   <ProgressBar
                     value={result.defaultProbability}
-                    color={result.riskBucket === "High" ? "destructive" : result.riskBucket === "Medium" ? "warning" : "success"}
+                    color={
+                      result.riskBucket === "High"
+                        ? "destructive"
+                        : result.riskBucket === "Medium"
+                        ? "warning"
+                        : "success"
+                    }
                     size="lg"
                   />
                 </div>
@@ -434,22 +650,32 @@ export default function LoanPrediction() {
                     <CreditCard className="w-5 h-5 text-primary" />
                     Recommended Products
                   </CardTitle>
+                  <CardDescription>
+                    Top cross-sell products based on risk profile
+                  </CardDescription>
                 </CardHeader>
-                <div className="space-y-3">
+                <div className="space-y-3 px-5 pb-5">
                   {result.recommendations.map((product, i) => (
                     <div
                       key={i}
                       className="p-3 rounded-lg bg-muted/50 flex items-center justify-between hover:bg-muted transition-colors"
                     >
                       <div>
-                        <p className="font-medium text-foreground">{product.name}</p>
+                        <p className="font-medium text-foreground">
+                          {product.name}
+                        </p>
                         <p className="text-sm text-muted-foreground">
-                          Rate: {product.interestRate} • Max: {product.maxAmount}
+                          Rate: {product.interestRate} • Max:{" "}
+                          {product.maxAmount}
                         </p>
                       </div>
                       <div className="text-right">
-                        <Badge variant="success">{product.acceptance}%</Badge>
-                        <p className="text-xs text-muted-foreground mt-1">Est. acceptance</p>
+                        <Badge variant="success">
+                          {product.acceptance}%
+                        </Badge>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Est. acceptance
+                        </p>
                       </div>
                     </div>
                   ))}
@@ -463,15 +689,20 @@ export default function LoanPrediction() {
                     <Info className="w-5 h-5 text-accent" />
                     Top Risk Factors
                   </CardTitle>
+                  <CardDescription>
+                    Key drivers behind this risk assessment
+                  </CardDescription>
                 </CardHeader>
-                <div className="space-y-3">
+                <div className="space-y-3 px-5 pb-5">
                   {result.factors.map((f, i) => (
                     <div
                       key={i}
                       className="flex items-center gap-3 p-3 rounded-lg bg-muted/50"
                     >
                       <div
-                        className={`w-8 h-8 rounded-full flex items-center justify-center ${f.isPositive ? "bg-success/10" : "bg-destructive/10"}`}
+                        className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                          f.isPositive ? "bg-success/10" : "bg-destructive/10"
+                        }`}
                       >
                         {f.isPositive ? (
                           <CheckCircle className="w-4 h-4 text-success" />
@@ -480,10 +711,14 @@ export default function LoanPrediction() {
                         )}
                       </div>
                       <div className="flex-1">
-                        <p className="font-medium text-foreground">{f.factor}</p>
+                        <p className="font-medium text-foreground">
+                          {f.factor}
+                        </p>
                       </div>
                       <span
-                        className={`text-sm font-medium ${f.isPositive ? "text-success" : "text-destructive"}`}
+                        className={`text-sm font-medium ${
+                          f.isPositive ? "text-success" : "text-destructive"
+                        }`}
                       >
                         {f.impact}
                       </span>

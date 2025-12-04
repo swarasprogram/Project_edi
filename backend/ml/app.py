@@ -5,13 +5,20 @@ import pandas as pd
 import numpy as np
 
 # 👇 FastAPI app
-app = FastAPI(title="Fraud Model Service")
+app = FastAPI(title="ML Model Service")
 
-# Load model (fraud_iforest.pkl must be in the same folder)
+# ---------- Load models ----------
+# Existing fraud model
 pipeline = joblib.load("fraud_iforest.pkl")
 
+# New loan default model (XGBoost pipeline)
+loan_pipeline = joblib.load("loan_default_xgboost_pipeline.joblib")
 
-# ---------- Request model for single scoring ----------
+
+# ============================================================
+#                       FRAUD MODEL
+# ============================================================
+
 class FraudRequest(BaseModel):
     amount: float
     tranction_type: str       # keep spelling to match frontend/.NET
@@ -46,7 +53,7 @@ def score_to_risk(decision_score: float) -> int:
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "fraud-model"}
+    return {"status": "ok", "service": "ml-model-service"}
 
 
 @app.post("/fraud/score")
@@ -102,7 +109,6 @@ def find_column(df: pd.DataFrame, candidates: list[str], desc: str) -> str:
     )
 
 
-# ---------- Bulk endpoint ----------
 @app.get("/transactions")
 def get_flagged_transactions():
     """
@@ -124,7 +130,6 @@ def get_flagged_transactions():
     for sheet in xls.sheet_names:
         tmp = xls.parse(sheet)
         cols_norm = [_normalize_name(c) for c in tmp.columns]
-        # look for something like "transactionid" or the typo "tranctiontype"
         if any("transactionid" in c for c in cols_norm) or any(
             "tranctiontype" in c for c in cols_norm
         ):
@@ -133,7 +138,6 @@ def get_flagged_transactions():
             break
 
     if tx_df is None:
-        # fallback: just use the last sheet, but complain loudly
         tx_sheet = xls.sheet_names[-1]
         tx_df = xls.parse(tx_sheet)
         print("WARNING: falling back to sheet:", tx_sheet)
@@ -142,7 +146,6 @@ def get_flagged_transactions():
     print("Using sheet:", tx_sheet)
     print("Columns in chosen sheet:", list(df.columns))
 
-    # 2) Map messy column names to logical ones
     tx_col = find_column(
         df,
         ["Transaction Id", "Transaction_Id", "Txn_Id", "TransactionID"],
@@ -170,10 +173,7 @@ def get_flagged_transactions():
         "payment mode",
     )
 
-    # 3) Build features
     df["Time_Stamp_std"] = pd.to_datetime(df[ts_col], errors="coerce")
-
-    # If some timestamps are NaT, fill with a default (so model doesn't crash)
     df["Time_Stamp_std"].fillna(method="ffill", inplace=True)
     df["Time_Stamp_std"].fillna(df["Time_Stamp_std"].iloc[0], inplace=True)
 
@@ -191,16 +191,13 @@ def get_flagged_transactions():
         }
     )
 
-    # 4) Run through pipeline
     decision_scores = pipeline.decision_function(X)
     risk_scores = score_array_to_risk(decision_scores)
     df["riskScore"] = risk_scores
 
-    # 5) Top N by risk
     TOP_N = 50
     top = df.sort_values("riskScore", ascending=False).head(TOP_N).copy()
 
-    # 6) Map to frontend format
     results = []
     for idx, row in top.iterrows():
         tx_val = row.get(tx_col, idx)
@@ -233,3 +230,79 @@ def get_flagged_transactions():
         )
 
     return results
+
+
+# ============================================================
+#                    LOAN DEFAULT MODEL
+# ============================================================
+
+class LoanRequest(BaseModel):
+    applicantIncome: float
+    loanAmount: float
+    tenureMonths: int
+    creditScore: float
+    existingLoans: int
+
+
+def build_loan_df(req: LoanRequest) -> pd.DataFrame:
+    """
+    Build the feature row expected by the XGBoost pipeline.
+    All columns that go through a numeric imputer must be numeric.
+    """
+    return pd.DataFrame(
+        {
+            # numeric core features we control
+            "loan_amnt": [req.loanAmount],                      # numeric
+            "term": [req.tenureMonths],                         # ✅ numeric, NOT "120 months"
+            "int_rate": [12.0],                                 # dummy interest
+            "installment": [req.loanAmount / max(req.tenureMonths, 1)],
+            "annual_inc": [req.applicantIncome * 12],
+            "dti": [20.0],                                      # dummy DTI
+            "open_acc": [3],
+            "pub_rec": [0],
+            "revol_bal": [req.loanAmount / 2],
+            "revol_util": [50.0],                               # ✅ numeric, NOT "50%"
+            "total_acc": [10],
+            "mort_acc": [1],
+            "pub_rec_bankruptcies": [0],
+
+            # these can stay string/categorical – they’ll go through OneHotEncoder
+            "emp_length": [10],                                 # ✅ numeric years, NOT "10+ years"
+            "home_ownership": ["MORTGAGE"],
+            "verification_status": ["Verified"],
+            "application_type": ["Individual"],
+            "purpose": ["debt_consolidation"],
+            "grade": ["B"],
+            "sub_grade": ["B3"],
+
+            # extra features we added around credit behaviour
+            "credit_score": [req.creditScore],
+            "existing_loans": [req.existingLoans],
+        }
+    )
+
+
+@app.post("/loan/score")
+def loan_score(req: LoanRequest):
+    df = build_loan_df(req)
+
+    try:
+        proba_default = float(loan_pipeline.predict_proba(df)[0][1])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Loan model error: {e}")
+
+    # 0–100 integer score
+    risk_score = int(round(proba_default * 100))
+
+    if risk_score >= 70:
+        risk_level = "HIGH"
+    elif risk_score >= 40:
+        risk_level = "MEDIUM"
+    else:
+        risk_level = "LOW"
+
+    return {
+        "defaultProbability": proba_default,
+        "riskScore": risk_score,
+        "riskLevel": risk_level,
+    }
